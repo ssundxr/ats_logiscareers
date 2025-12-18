@@ -1,11 +1,13 @@
 """
 Utility functions for PDF text extraction and NLP-based skill extraction.
+Enhanced with synonym matching, fuzzy matching, and weighted scoring.
 """
 
 import re
 import spacy
 from pdfminer.high_level import extract_text
 from io import BytesIO
+from difflib import SequenceMatcher
 
 
 # Load SpaCy model (loaded once at module level for performance)
@@ -16,6 +18,214 @@ except OSError:
     import subprocess
     subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"])
     nlp = spacy.load("en_core_web_sm")
+
+
+# ============================================================================
+# SKILL SYNONYMS - Maps variations to canonical skill names
+# ============================================================================
+SKILL_SYNONYMS = {
+    # JavaScript variations
+    "js": "javascript",
+    "es6": "javascript",
+    "es2015": "javascript",
+    "ecmascript": "javascript",
+    
+    # TypeScript
+    "ts": "typescript",
+    
+    # React variations
+    "react.js": "react",
+    "reactjs": "react",
+    "react js": "react",
+    
+    # Vue variations
+    "vue.js": "vuejs",
+    "vue js": "vuejs",
+    
+    # Angular variations
+    "angular.js": "angular",
+    "angularjs": "angular",
+    "angular js": "angular",
+    
+    # Node variations
+    "node.js": "nodejs",
+    "node js": "nodejs",
+    "node": "nodejs",
+    
+    # Next.js variations
+    "next.js": "nextjs",
+    "next js": "nextjs",
+    
+    # Python variations
+    "python3": "python",
+    "python 3": "python",
+    "py": "python",
+    
+    # PostgreSQL variations
+    "postgres": "postgresql",
+    "psql": "postgresql",
+    "pg": "postgresql",
+    
+    # MongoDB variations
+    "mongo": "mongodb",
+    
+    # Kubernetes variations
+    "k8s": "kubernetes",
+    "kube": "kubernetes",
+    
+    # Amazon Web Services
+    "amazon web services": "aws",
+    "amazon aws": "aws",
+    
+    # Google Cloud
+    "google cloud platform": "gcp",
+    "google cloud": "gcp",
+    
+    # Machine Learning
+    "ml": "machine learning",
+    "machine-learning": "machine learning",
+    
+    # Artificial Intelligence
+    "artificial intelligence": "ai",
+    
+    # Deep Learning
+    "dl": "deep learning",
+    "deep-learning": "deep learning",
+    
+    # Natural Language Processing
+    "natural language processing": "nlp",
+    
+    # C++ variations
+    "cpp": "c++",
+    "cplusplus": "c++",
+    
+    # C# variations
+    "csharp": "c#",
+    "c sharp": "c#",
+    
+    # .NET variations
+    "dotnet": ".net",
+    "dot net": ".net",
+    
+    # CI/CD variations
+    "ci/cd": "cicd",
+    "ci-cd": "cicd",
+    "continuous integration": "cicd",
+    "continuous deployment": "cicd",
+    
+    # API variations
+    "rest api": "restful",
+    "rest apis": "restful",
+    "restful api": "restful",
+    
+    # Testing variations
+    "unit test": "unit testing",
+    "unit tests": "unit testing",
+    "unittest": "unit testing",
+    
+    # Agile variations
+    "agile methodology": "agile",
+    "agile development": "agile",
+    
+    # OOP
+    "object oriented programming": "oop",
+    "object-oriented programming": "oop",
+    "object oriented": "oop",
+    
+    # Data structures
+    "data structure": "data structures",
+    "dsa": "data structures",
+    
+    # Scikit-learn
+    "scikit learn": "sklearn",
+    "scikit-learn": "sklearn",
+    
+    # TensorFlow
+    "tensor flow": "tensorflow",
+    "tensor-flow": "tensorflow",
+    
+    # PyTorch
+    "py torch": "pytorch",
+    
+    # FastAPI
+    "fast api": "fastapi",
+    "fast-api": "fastapi",
+    
+    # Spring Boot
+    "springboot": "spring boot",
+    "spring-boot": "spring boot",
+    
+    # Ruby on Rails
+    "rails": "ruby on rails",
+    "ror": "ruby on rails",
+    
+    # React Native
+    "react-native": "react native",
+    "reactnative": "react native",
+    
+    # Power BI
+    "powerbi": "power bi",
+    "power-bi": "power bi",
+    
+    # GitHub Actions
+    "github-actions": "github actions",
+    "gh actions": "github actions",
+    
+    # Experience level keywords
+    "sr": "senior",
+    "sr.": "senior",
+    "jr": "junior",
+    "jr.": "junior",
+}
+
+# Reverse synonym map for lookups
+CANONICAL_TO_SYNONYMS = {}
+for synonym, canonical in SKILL_SYNONYMS.items():
+    if canonical not in CANONICAL_TO_SYNONYMS:
+        CANONICAL_TO_SYNONYMS[canonical] = set()
+    CANONICAL_TO_SYNONYMS[canonical].add(synonym)
+
+
+# ============================================================================
+# SKILL WEIGHTS - Some skills are more important/rare
+# ============================================================================
+SKILL_WEIGHTS = {
+    # High-demand/specialized skills (weight: 1.5)
+    "kubernetes": 1.5,
+    "docker": 1.3,
+    "aws": 1.4,
+    "gcp": 1.4,
+    "azure": 1.4,
+    "terraform": 1.5,
+    "machine learning": 1.5,
+    "deep learning": 1.6,
+    "pytorch": 1.5,
+    "tensorflow": 1.5,
+    "nlp": 1.5,
+    "computer vision": 1.6,
+    "microservices": 1.3,
+    "system design": 1.4,
+    "spark": 1.4,
+    "kafka": 1.4,
+    "elasticsearch": 1.3,
+    "graphql": 1.3,
+    "rust": 1.4,
+    "go": 1.3,
+    "scala": 1.3,
+    
+    # Common skills (weight: 1.0) - default
+    # python, javascript, react, etc.
+    
+    # Very common/basic skills (weight: 0.8)
+    "git": 0.8,
+    "html": 0.7,
+    "css": 0.7,
+    "sql": 0.9,
+    "agile": 0.8,
+    "jira": 0.7,
+    "slack": 0.5,
+    "excel": 0.6,
+}
 
 
 # Predefined list of common tech skills for accurate matching
@@ -151,12 +361,13 @@ def clean_text(text):
 def extract_skills(text):
     """
     Extract technical skills from text using SpaCy NER and predefined skill matching.
+    Enhanced with synonym normalization.
     
     Args:
         text: Text content to analyze.
         
     Returns:
-        list: List of unique skills found in the text.
+        list: List of unique skills found in the text (normalized to canonical form).
     """
     if not text:
         return []
@@ -173,10 +384,17 @@ def extract_skills(text):
         # e.g., "java" shouldn't match "javascript"
         pattern = r'\b' + re.escape(skill_lower) + r'\b'
         if re.search(pattern, text_lower):
-            # Store the original casing from our list
-            found_skills.add(skill)
+            # Normalize to canonical form if it's a synonym
+            canonical = SKILL_SYNONYMS.get(skill_lower, skill_lower)
+            found_skills.add(canonical)
     
-    # Method 2: Use SpaCy NER for additional entity extraction
+    # Method 2: Check for synonyms directly in text
+    for synonym, canonical in SKILL_SYNONYMS.items():
+        pattern = r'\b' + re.escape(synonym.lower()) + r'\b'
+        if re.search(pattern, text_lower):
+            found_skills.add(canonical)
+    
+    # Method 3: Use SpaCy NER for additional entity extraction
     doc = nlp(text[:100000])  # Limit text length for performance
     
     for ent in doc.ents:
@@ -187,10 +405,61 @@ def extract_skills(text):
             if 2 <= len(ent_lower) <= 30:
                 # Check if it matches any of our known skills
                 if ent_lower in TECH_SKILLS_SET:
-                    found_skills.add(ent.text.strip())
+                    canonical = SKILL_SYNONYMS.get(ent_lower, ent_lower)
+                    found_skills.add(canonical)
     
     # Convert to sorted list for consistent output
     return sorted(list(found_skills), key=str.lower)
+
+
+def normalize_skill(skill):
+    """
+    Normalize a skill to its canonical form using synonyms.
+    
+    Args:
+        skill: Skill string to normalize.
+        
+    Returns:
+        str: Canonical form of the skill.
+    """
+    skill_lower = skill.lower().strip()
+    return SKILL_SYNONYMS.get(skill_lower, skill_lower)
+
+
+def fuzzy_match_skill(skill, skill_list, threshold=0.85):
+    """
+    Find the best fuzzy match for a skill in a list.
+    
+    Args:
+        skill: Skill to match.
+        skill_list: List of skills to match against.
+        threshold: Minimum similarity ratio (0-1).
+        
+    Returns:
+        tuple: (matched_skill, similarity_ratio) or (None, 0) if no match.
+    """
+    skill_lower = skill.lower()
+    best_match = None
+    best_ratio = 0
+    
+    for candidate in skill_list:
+        candidate_lower = candidate.lower()
+        
+        # Exact match
+        if skill_lower == candidate_lower:
+            return candidate, 1.0
+        
+        # Check synonyms
+        if normalize_skill(skill_lower) == normalize_skill(candidate_lower):
+            return candidate, 1.0
+        
+        # Fuzzy match using SequenceMatcher
+        ratio = SequenceMatcher(None, skill_lower, candidate_lower).ratio()
+        if ratio > best_ratio and ratio >= threshold:
+            best_match = candidate
+            best_ratio = ratio
+    
+    return best_match, best_ratio
 
 
 def extract_experience_years(text):
@@ -266,6 +535,7 @@ def extract_education_level(text):
 def calculate_skill_match(job_skills, candidate_skills):
     """
     Calculate the percentage of job skills matched by candidate.
+    Enhanced with synonym matching, fuzzy matching, and weighted scoring.
     
     Args:
         job_skills: List of skills required for the job.
@@ -277,17 +547,150 @@ def calculate_skill_match(job_skills, candidate_skills):
     if not job_skills:
         return 0.0, {}
     
-    job_skills_lower = set(s.lower() for s in job_skills)
-    candidate_skills_lower = set(s.lower() for s in candidate_skills)
+    # Normalize all skills to canonical form
+    job_skills_normalized = {normalize_skill(s): s for s in job_skills}
+    candidate_skills_normalized = {normalize_skill(s): s for s in candidate_skills}
     
-    matched = job_skills_lower.intersection(candidate_skills_lower)
+    matched_skills = {}
+    total_weight = 0
+    matched_weight = 0
     
-    match_percentage = (len(matched) / len(job_skills_lower)) * 100
+    for canonical, original in job_skills_normalized.items():
+        # Get weight for this skill (default 1.0)
+        weight = SKILL_WEIGHTS.get(canonical, 1.0)
+        total_weight += weight
+        
+        # Check for exact match (after normalization)
+        if canonical in candidate_skills_normalized:
+            matched_skills[original] = True
+            matched_weight += weight
+        else:
+            # Try fuzzy matching
+            best_match, ratio = fuzzy_match_skill(
+                canonical, 
+                list(candidate_skills_normalized.keys()),
+                threshold=0.85
+            )
+            if best_match:
+                matched_skills[original] = True
+                # Partial credit for fuzzy match
+                matched_weight += weight * ratio
+            else:
+                matched_skills[original] = False
     
-    # Create a dict showing which skills matched
-    matched_skills = {
-        skill: skill.lower() in matched
-        for skill in job_skills
-    }
+    # Calculate weighted percentage
+    if total_weight > 0:
+        match_percentage = (matched_weight / total_weight) * 100
+    else:
+        match_percentage = 0.0
     
     return round(match_percentage, 2), matched_skills
+
+
+def calculate_skill_match_detailed(job_skills, candidate_skills):
+    """
+    Calculate detailed skill match with additional metrics.
+    
+    Args:
+        job_skills: List of skills required for the job.
+        candidate_skills: List of skills the candidate has.
+        
+    Returns:
+        dict: Detailed matching results.
+    """
+    if not job_skills:
+        return {
+            'match_percentage': 0.0,
+            'weighted_percentage': 0.0,
+            'matched_skills': [],
+            'missing_skills': [],
+            'extra_skills': [],
+            'fuzzy_matches': [],
+            'skill_details': {}
+        }
+    
+    # Normalize skills
+    job_normalized = {normalize_skill(s): s for s in job_skills}
+    candidate_normalized = {normalize_skill(s): s for s in candidate_skills}
+    
+    matched = []
+    missing = []
+    fuzzy_matches = []
+    skill_details = {}
+    
+    total_weight = 0
+    matched_weight = 0
+    
+    for canonical, original in job_normalized.items():
+        weight = SKILL_WEIGHTS.get(canonical, 1.0)
+        total_weight += weight
+        
+        detail = {
+            'skill': original,
+            'canonical': canonical,
+            'weight': weight,
+            'matched': False,
+            'match_type': None,
+            'matched_with': None,
+            'similarity': 0
+        }
+        
+        if canonical in candidate_normalized:
+            matched.append(original)
+            matched_weight += weight
+            detail['matched'] = True
+            detail['match_type'] = 'exact'
+            detail['matched_with'] = candidate_normalized[canonical]
+            detail['similarity'] = 1.0
+        else:
+            # Try fuzzy matching
+            best_match, ratio = fuzzy_match_skill(
+                canonical,
+                list(candidate_normalized.keys()),
+                threshold=0.80
+            )
+            if best_match:
+                matched.append(original)
+                matched_weight += weight * ratio
+                fuzzy_matches.append({
+                    'required': original,
+                    'found': candidate_normalized.get(best_match, best_match),
+                    'similarity': ratio
+                })
+                detail['matched'] = True
+                detail['match_type'] = 'fuzzy'
+                detail['matched_with'] = candidate_normalized.get(best_match, best_match)
+                detail['similarity'] = ratio
+            else:
+                missing.append(original)
+        
+        skill_details[original] = detail
+    
+    # Find extra skills candidate has
+    extra = []
+    for canonical, original in candidate_normalized.items():
+        if canonical not in job_normalized:
+            # Check if not already matched via fuzzy
+            already_matched = any(
+                fm['found'].lower() == original.lower() 
+                for fm in fuzzy_matches
+            )
+            if not already_matched:
+                extra.append(original)
+    
+    # Calculate percentages
+    simple_percentage = (len(matched) / len(job_skills)) * 100 if job_skills else 0
+    weighted_percentage = (matched_weight / total_weight) * 100 if total_weight > 0 else 0
+    
+    return {
+        'match_percentage': round(simple_percentage, 2),
+        'weighted_percentage': round(weighted_percentage, 2),
+        'matched_skills': matched,
+        'missing_skills': missing,
+        'extra_skills': extra,
+        'fuzzy_matches': fuzzy_matches,
+        'skill_details': skill_details,
+        'total_required': len(job_skills),
+        'total_matched': len(matched),
+        'total_candidate_skills': len(candidate_skills)
+    }

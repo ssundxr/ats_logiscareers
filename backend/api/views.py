@@ -420,6 +420,7 @@ class CVScoreCheckerViewSet(viewsets.ViewSet):
     """
     ViewSet for quick CV score checking without saving to database.
     Upload a CV and provide job requirements to get instant matching score.
+    Enhanced with synonym matching, fuzzy matching, and weighted scoring.
     """
     permission_classes = [AllowAny]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
@@ -437,20 +438,25 @@ class CVScoreCheckerViewSet(viewsets.ViewSet):
         - job_description: Optional job description text
         
         Returns:
-        - match_percentage: Overall match score
+        - match_percentage: Overall match score (simple)
+        - weighted_percentage: Weighted match score (skills weighted by importance)
         - matched_skills: List of skills that matched
         - missing_skills: List of skills not found in CV
+        - fuzzy_matches: Skills matched via fuzzy matching
         - cv_skills: All skills extracted from CV
         - cv_text: Extracted text from CV with match positions
         - experience_match: Whether experience requirement is met
         - highlights: Positions of matched keywords for highlighting
+        - skill_details: Detailed breakdown for each skill
         """
         from .utils import (
             extract_text_from_pdf,
             extract_skills,
             extract_experience_years,
             extract_education_level,
-            calculate_skill_match,
+            calculate_skill_match_detailed,
+            normalize_skill,
+            CANONICAL_TO_SYNONYMS,
         )
         import re
         
@@ -496,58 +502,86 @@ class CVScoreCheckerViewSet(viewsets.ViewSet):
         cv_experience = extract_experience_years(cv_text)
         cv_education = extract_education_level(cv_text)
         
-        # Calculate skill match
-        if all_required_skills:
-            match_percentage, skill_matches = calculate_skill_match(
-                all_required_skills,
-                cv_skills
-            )
-            matched_skills = [skill for skill, matched in skill_matches.items() if matched]
-            missing_skills = [skill for skill, matched in skill_matches.items() if not matched]
-        else:
-            match_percentage = 0
-            matched_skills = []
-            missing_skills = []
-            skill_matches = {}
+        # Calculate detailed skill match with enhanced algorithm
+        match_result = calculate_skill_match_detailed(
+            all_required_skills,
+            cv_skills
+        )
         
-        # Check experience match
+        matched_skills = match_result['matched_skills']
+        missing_skills = match_result['missing_skills']
+        fuzzy_matches = match_result['fuzzy_matches']
+        extra_skills = match_result['extra_skills']
+        skill_details = match_result['skill_details']
+        
+        # Check experience match with tolerance
         experience_match = cv_experience >= required_experience if required_experience > 0 else True
+        experience_score = min(100, (cv_experience / required_experience * 100)) if required_experience > 0 else 100
         
         # Find highlight positions for matched keywords in CV text
         highlights = []
         cv_text_lower = cv_text.lower()
         
-        # Highlight matched skills
+        # Highlight matched skills - including synonyms
         for skill in matched_skills:
-            skill_lower = skill.lower()
-            pattern = r'\b' + re.escape(skill_lower) + r'\b'
-            for match in re.finditer(pattern, cv_text_lower):
-                highlights.append({
-                    'start': match.start(),
-                    'end': match.end(),
-                    'text': cv_text[match.start():match.end()],
-                    'type': 'skill_match',
-                    'skill': skill,
-                })
-        
-        # Highlight all CV skills (even those not in job requirements)
-        for skill in cv_skills:
-            if skill.lower() not in [m.lower() for m in matched_skills]:
-                skill_lower = skill.lower()
-                pattern = r'\b' + re.escape(skill_lower) + r'\b'
-                for match in re.finditer(pattern, cv_text_lower):
+            # Get the canonical form and all synonyms
+            canonical = normalize_skill(skill)
+            synonyms = CANONICAL_TO_SYNONYMS.get(canonical, set())
+            synonyms.add(skill.lower())
+            synonyms.add(canonical.lower())
+            
+            for variant in synonyms:
+                if len(variant) < 2:
+                    continue  # Skip very short patterns
+                pattern = r'\b' + re.escape(variant) + r'\b'
+                for match in re.finditer(pattern, cv_text_lower, re.IGNORECASE):
                     highlights.append({
                         'start': match.start(),
                         'end': match.end(),
                         'text': cv_text[match.start():match.end()],
-                        'type': 'skill_found',
+                        'type': 'skill_match',
                         'skill': skill,
+                        'canonical': canonical,
                     })
+        
+        # Highlight fuzzy matched skills
+        for fuzzy in fuzzy_matches:
+            required = fuzzy['required']
+            found = fuzzy['found']
+            similarity = fuzzy['similarity']
+            found_lower = found.lower()
+            pattern = r'\b' + re.escape(found_lower) + r'\b'
+            for match in re.finditer(pattern, cv_text_lower, re.IGNORECASE):
+                highlights.append({
+                    'start': match.start(),
+                    'end': match.end(),
+                    'text': cv_text[match.start():match.end()],
+                    'type': 'fuzzy_match',
+                    'skill': required,
+                    'matched_as': found,
+                    'similarity': round(similarity, 2),
+                })
+        
+        # Highlight extra skills (in CV but not required)
+        for skill in extra_skills:
+            skill_lower = skill.lower()
+            pattern = r'\b' + re.escape(skill_lower) + r'\b'
+            for match in re.finditer(pattern, cv_text_lower, re.IGNORECASE):
+                highlights.append({
+                    'start': match.start(),
+                    'end': match.end(),
+                    'text': cv_text[match.start():match.end()],
+                    'type': 'extra_skill',
+                    'skill': skill,
+                })
         
         # Sort highlights by position
         highlights.sort(key=lambda x: x['start'])
         
-        # Remove overlapping highlights (keep the first one)
+        # Remove overlapping highlights (prefer skill_match > fuzzy_match > extra_skill)
+        type_priority = {'skill_match': 0, 'fuzzy_match': 1, 'extra_skill': 2}
+        highlights.sort(key=lambda x: (x['start'], type_priority.get(x['type'], 99)))
+        
         filtered_highlights = []
         last_end = -1
         for h in highlights:
@@ -555,20 +589,40 @@ class CVScoreCheckerViewSet(viewsets.ViewSet):
                 filtered_highlights.append(h)
                 last_end = h['end']
         
+        # Calculate overall score combining skills and experience
+        skill_weight = 0.8
+        experience_weight = 0.2
+        overall_score = (match_result['weighted_percentage'] * skill_weight) + (experience_score * experience_weight)
+        
         return Response({
             'job_title': job_title,
-            'match_percentage': match_percentage,
+            'overall_score': round(overall_score, 2),
+            'match_percentage': match_result['match_percentage'],
+            'weighted_percentage': match_result['weighted_percentage'],
             'matched_skills': matched_skills,
             'missing_skills': missing_skills,
+            'fuzzy_matches': fuzzy_matches,
+            'extra_skills': extra_skills,
             'required_skills': all_required_skills,
             'cv_skills': cv_skills,
             'cv_experience_years': cv_experience,
             'cv_education': cv_education,
             'required_experience_years': required_experience,
             'experience_match': experience_match,
+            'experience_score': round(experience_score, 2),
             'cv_text': cv_text,
             'highlights': filtered_highlights,
             'total_skills_found': len(cv_skills),
             'total_skills_matched': len(matched_skills),
             'total_skills_required': len(all_required_skills),
+            'skill_details': skill_details,
+            'matching_algorithm': {
+                'version': '2.0',
+                'features': [
+                    'synonym_matching',
+                    'fuzzy_matching',
+                    'weighted_scoring',
+                    'experience_scoring'
+                ]
+            }
         })

@@ -220,26 +220,57 @@ export interface CVScoreHighlight {
   start: number;
   end: number;
   text: string;
-  type: 'skill_match' | 'skill_found';
+  type: 'skill_match' | 'fuzzy_match' | 'extra_skill' | 'skill_found';
   skill: string;
+  canonical?: string;
+  matched_as?: string;
+  similarity?: number;
+}
+
+export interface FuzzyMatch {
+  required: string;
+  found: string;
+  similarity: number;
+}
+
+export interface SkillDetail {
+  skill: string;
+  canonical: string;
+  weight: number;
+  matched: boolean;
+  match_type: 'exact' | 'fuzzy' | null;
+  matched_with: string | null;
+  similarity: number;
+}
+
+export interface MatchingAlgorithm {
+  version: string;
+  features: string[];
 }
 
 export interface CVScoreResult {
   job_title: string;
+  overall_score?: number;
   match_percentage: number;
+  weighted_percentage?: number;
   matched_skills: string[];
   missing_skills: string[];
+  fuzzy_matches?: FuzzyMatch[];
+  extra_skills?: string[];
   required_skills: string[];
   cv_skills: string[];
   cv_experience_years: number;
   cv_education: string | null;
   required_experience_years: number;
   experience_match: boolean;
+  experience_score?: number;
   cv_text: string;
   highlights: CVScoreHighlight[];
   total_skills_found: number;
   total_skills_matched: number;
   total_skills_required: number;
+  skill_details?: { [key: string]: SkillDetail };
+  matching_algorithm?: MatchingAlgorithm;
 }
 
 export const cvCheckerApi = {

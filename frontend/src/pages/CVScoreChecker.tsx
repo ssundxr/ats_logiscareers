@@ -1,6 +1,12 @@
 import { useState, useRef } from 'react';
-import { Upload, FileText, CheckCircle, XCircle, Loader2, Sparkles, Target, GraduationCap, Briefcase } from 'lucide-react';
+import { Upload, FileText, CheckCircle, XCircle, Loader2, Sparkles, Target, GraduationCap, Briefcase, Zap, AlertCircle, TrendingUp } from 'lucide-react';
 import { cvCheckerApi, CVScoreResult, CVScoreHighlight } from '../services/api';
+
+interface FuzzyMatch {
+  required: string;
+  found: string;
+  similarity: number;
+}
 
 const CVScoreChecker = () => {
   const [cvFile, setCvFile] = useState<File | null>(null);
@@ -93,16 +99,29 @@ const CVScoreChecker = () => {
         );
       }
 
-      // Add highlighted text
-      const highlightClass = highlight.type === 'skill_match'
-        ? 'bg-green-200 text-green-800 px-1 rounded font-medium'
-        : 'bg-blue-100 text-blue-700 px-1 rounded';
+      // Add highlighted text with different colors based on type
+      let highlightClass = '';
+      let tooltipText = '';
+      
+      if (highlight.type === 'skill_match') {
+        highlightClass = 'bg-green-200 text-green-800 px-1 rounded font-medium';
+        tooltipText = `Exact Match: ${highlight.skill}`;
+      } else if (highlight.type === 'fuzzy_match') {
+        highlightClass = 'bg-yellow-200 text-yellow-800 px-1 rounded font-medium';
+        tooltipText = `Fuzzy Match: "${highlight.text}" ≈ "${highlight.skill}" (${Math.round((highlight.similarity || 0) * 100)}%)`;
+      } else if (highlight.type === 'extra_skill') {
+        highlightClass = 'bg-blue-100 text-blue-700 px-1 rounded';
+        tooltipText = `Additional Skill: ${highlight.skill}`;
+      } else {
+        highlightClass = 'bg-blue-100 text-blue-700 px-1 rounded';
+        tooltipText = `Found skill: ${highlight.skill}`;
+      }
 
       elements.push(
         <span
           key={`highlight-${index}`}
           className={highlightClass}
-          title={highlight.type === 'skill_match' ? `Matched: ${highlight.skill}` : `Found skill: ${highlight.skill}`}
+          title={tooltipText}
         >
           {highlight.text}
         </span>
@@ -149,7 +168,7 @@ const CVScoreChecker = () => {
         </div>
         <div>
           <h1 className="text-3xl font-bold text-gray-900">CV Score Checker</h1>
-          <p className="text-gray-600">Upload a CV and check how well it matches your job requirements</p>
+          <p className="text-gray-600">AI-powered CV analysis with synonym detection and fuzzy matching</p>
         </div>
       </div>
 
@@ -220,6 +239,7 @@ const CVScoreChecker = () => {
                 rows={3}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               />
+              <p className="text-xs text-gray-500 mt-1">Tip: Common aliases like "JS", "React.js" are automatically recognized</p>
             </div>
 
             {/* Experience Years */}
@@ -292,25 +312,45 @@ const CVScoreChecker = () => {
                   <span className="text-sm text-gray-500">{result.job_title}</span>
                 </div>
 
-                {/* Circular Score */}
-                <div className="flex justify-center mb-6">
-                  <div className={`relative w-40 h-40 rounded-full bg-gradient-to-br ${getScoreGradient(result.match_percentage)} p-2`}>
+                {/* Score Display - Overall Score */}
+                <div className="flex justify-center mb-4">
+                  <div className={`relative w-36 h-36 rounded-full bg-gradient-to-br ${getScoreGradient(result.overall_score || result.match_percentage)} p-2`}>
                     <div className="w-full h-full bg-white rounded-full flex items-center justify-center">
                       <div className="text-center">
-                        <span className={`text-4xl font-bold ${getScoreColor(result.match_percentage)}`}>
-                          {result.match_percentage}%
+                        <span className={`text-3xl font-bold ${getScoreColor(result.overall_score || result.match_percentage)}`}>
+                          {result.overall_score || result.match_percentage}%
                         </span>
-                        <p className="text-sm text-gray-500 mt-1">Match</p>
+                        <p className="text-xs text-gray-500 mt-1">Overall Score</p>
                       </div>
                     </div>
                   </div>
                 </div>
 
+                {/* Detailed Scores */}
+                {result.weighted_percentage !== undefined && (
+                  <div className="grid grid-cols-2 gap-3 mb-4">
+                    <div className="bg-indigo-50 rounded-lg p-3 text-center">
+                      <div className="flex items-center justify-center text-indigo-600 mb-1">
+                        <TrendingUp className="h-4 w-4 mr-1" />
+                        <span className="text-xs font-medium">Weighted Score</span>
+                      </div>
+                      <p className="text-xl font-bold text-indigo-700">{result.weighted_percentage}%</p>
+                    </div>
+                    <div className="bg-purple-50 rounded-lg p-3 text-center">
+                      <div className="flex items-center justify-center text-purple-600 mb-1">
+                        <Zap className="h-4 w-4 mr-1" />
+                        <span className="text-xs font-medium">Simple Score</span>
+                      </div>
+                      <p className="text-xl font-bold text-purple-700">{result.match_percentage}%</p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Progress Bar */}
                 <div className="h-3 bg-gray-200 rounded-full overflow-hidden mb-6">
                   <div
-                    className={`h-full ${getScoreBg(result.match_percentage)} transition-all duration-500`}
-                    style={{ width: `${result.match_percentage}%` }}
+                    className={`h-full ${getScoreBg(result.overall_score || result.match_percentage)} transition-all duration-500`}
+                    style={{ width: `${result.overall_score || result.match_percentage}%` }}
                   />
                 </div>
 
@@ -329,6 +369,9 @@ const CVScoreChecker = () => {
                         <span className="text-red-500 ml-1">(Need {result.required_experience_years})</span>
                       )}
                     </p>
+                    {result.experience_score !== undefined && (
+                      <p className="text-xs text-gray-500">Score: {result.experience_score}%</p>
+                    )}
                   </div>
                   <div className="bg-gray-50 rounded-lg p-3">
                     <div className="flex items-center text-gray-600 mb-1">
@@ -338,6 +381,15 @@ const CVScoreChecker = () => {
                     <p className="font-semibold">{result.cv_education || 'Not detected'}</p>
                   </div>
                 </div>
+
+                {/* Algorithm Info */}
+                {result.matching_algorithm && (
+                  <div className="mt-4 pt-4 border-t border-gray-100">
+                    <p className="text-xs text-gray-400 text-center">
+                      Algorithm v{result.matching_algorithm.version}: {result.matching_algorithm.features?.join(', ')}
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Skills Analysis */}
@@ -369,6 +421,33 @@ const CVScoreChecker = () => {
                     </div>
                   </div>
 
+                  {/* Fuzzy Matches */}
+                  {result.fuzzy_matches && result.fuzzy_matches.length > 0 && (
+                    <div>
+                      <div className="flex items-center text-yellow-600 mb-2">
+                        <AlertCircle className="h-5 w-5 mr-2" />
+                        <span className="font-medium">
+                          Fuzzy Matches ({result.fuzzy_matches.length})
+                        </span>
+                      </div>
+                      <div className="space-y-2">
+                        {result.fuzzy_matches.map((fm: FuzzyMatch, index: number) => (
+                          <div
+                            key={index}
+                            className="flex items-center justify-between px-3 py-2 bg-yellow-50 rounded-lg text-sm"
+                          >
+                            <span className="text-yellow-800">
+                              "{fm.found}" ≈ "{fm.required}"
+                            </span>
+                            <span className="text-yellow-600 font-medium">
+                              {Math.round(fm.similarity * 100)}% match
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Missing Skills */}
                   <div>
                     <div className="flex items-center text-red-600 mb-2">
@@ -393,24 +472,22 @@ const CVScoreChecker = () => {
                     </div>
                   </div>
 
-                  {/* Other Skills Found */}
-                  {result.cv_skills.filter(s => !result.matched_skills.map(m => m.toLowerCase()).includes(s.toLowerCase())).length > 0 && (
+                  {/* Extra Skills Found */}
+                  {result.extra_skills && result.extra_skills.length > 0 && (
                     <div>
                       <div className="flex items-center text-blue-600 mb-2">
                         <Sparkles className="h-5 w-5 mr-2" />
-                        <span className="font-medium">Additional Skills in CV</span>
+                        <span className="font-medium">Bonus Skills in CV ({result.extra_skills.length})</span>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        {result.cv_skills
-                          .filter(s => !result.matched_skills.map(m => m.toLowerCase()).includes(s.toLowerCase()))
-                          .map((skill, index) => (
-                            <span
-                              key={index}
-                              className="px-3 py-1 bg-blue-50 text-blue-600 rounded-full text-sm"
-                            >
-                              {skill}
-                            </span>
-                          ))}
+                        {result.extra_skills.map((skill: string, index: number) => (
+                          <span
+                            key={index}
+                            className="px-3 py-1 bg-blue-50 text-blue-600 rounded-full text-sm"
+                          >
+                            {skill}
+                          </span>
+                        ))}
                       </div>
                     </div>
                   )}
@@ -435,11 +512,15 @@ const CVScoreChecker = () => {
             <div className="flex items-center space-x-4 text-sm">
               <div className="flex items-center">
                 <span className="w-4 h-4 bg-green-200 rounded mr-2"></span>
-                <span className="text-gray-600">Matched Skills</span>
+                <span className="text-gray-600">Exact Match</span>
+              </div>
+              <div className="flex items-center">
+                <span className="w-4 h-4 bg-yellow-200 rounded mr-2"></span>
+                <span className="text-gray-600">Fuzzy Match</span>
               </div>
               <div className="flex items-center">
                 <span className="w-4 h-4 bg-blue-100 rounded mr-2"></span>
-                <span className="text-gray-600">Other Skills Found</span>
+                <span className="text-gray-600">Extra Skills</span>
               </div>
             </div>
           </div>
