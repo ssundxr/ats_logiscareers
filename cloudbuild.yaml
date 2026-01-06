@@ -1,41 +1,56 @@
 steps:
-  # Build the backend Docker image
-  - name: 'gcr.io/cloud-builders/docker'
-    args:
-      - 'build'
-      - '-t'
-      - 'asia-south1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/atslogiscareers'
-      - '-f'
-      - 'backend/Dockerfile'
-      - 'backend'
+# ---------------- BACKEND ----------------
+- name: gcr.io/cloud-builders/docker
+  args:
+    - build
+    - -t
+    - asia-south1-docker.pkg.dev/$PROJECT_ID/ats/ats-backend
+    - -f
+    - backend/Dockerfile
+    - backend
 
-  # Push the image to Artifact Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args:
-      - 'push'
-      - 'asia-south1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/atslogiscareers'
+- name: gcr.io/cloud-builders/docker
+  args:
+    - push
+    - asia-south1-docker.pkg.dev/$PROJECT_ID/ats/ats-backend
 
-  # Deploy to Cloud Run
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
-    args:
-      - 'run'
-      - 'deploy'
-      - 'atslogiscareers'
-      - '--image'
-      - 'asia-south1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/atslogiscareers'
-      - '--region'
-      - 'asia-south1'
-      - '--platform'
-      - 'managed'
-      - '--allow-unauthenticated'
-      - '--memory'
-      - '1Gi'
-      - '--set-env-vars'
-      - 'DJANGO_SETTINGS_MODULE=core.settings_production,SECRET_KEY=ats-logiscareers-secret-key-2025-prod,DEBUG=False,ALLOWED_HOSTS=*,CORS_ALLOW_ALL_ORIGINS=True'
+- name: gcr.io/google.com/cloudsdktool/cloud-sdk
+  entrypoint: gcloud
+  args:
+    - run
+    - deploy
+    - ats-backend
+    - --image
+    - asia-south1-docker.pkg.dev/$PROJECT_ID/ats/ats-backend
+    - --region
+    - asia-south1
+    - --allow-unauthenticated
+    - --set-env-vars
+    - DJANGO_SETTINGS_MODULE=core.settings_production,DEBUG=False
 
-images:
-  - 'asia-south1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/atslogiscareers'
+# ---------------- FRONTEND ----------------
+- name: gcr.io/cloud-builders/docker
+  args:
+    - build
+    - -t
+    - asia-south1-docker.pkg.dev/$PROJECT_ID/ats/ats-frontend
+    - -f
+    - frontend/Dockerfile
+    - frontend
 
-options:
-  logging: CLOUD_LOGGING_ONLY
+- name: gcr.io/cloud-builders/docker
+  args:
+    - push
+    - asia-south1-docker.pkg.dev/$PROJECT_ID/ats/ats-frontend
+
+- name: gcr.io/google.com/cloudsdktool/cloud-sdk
+  entrypoint: gcloud
+  args:
+    - run
+    - deploy
+    - ats-frontend
+    - --image
+    - asia-south1-docker.pkg.dev/$PROJECT_ID/ats/ats-frontend
+    - --region
+    - asia-south1
+    - --allow-unauthenticated
