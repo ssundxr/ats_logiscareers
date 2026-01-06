@@ -1,107 +1,69 @@
-# cloudbuild.yaml
-# Build and deploy ATS LogisCareers backend + frontend to Cloud Run using .env for backend
-
-substitutions:
-  _REGION: "asia-south1"
-  _BACKEND_SERVICE: "ats-backend"
-  _FRONTEND_SERVICE: "ats-frontend"
-  _ARTIFACT_REPO: "ats"  # your Artifact Registry repo name
-  _ENV_FILE: "backend/.env"  # path to your backend env file
-
 steps:
-  # --------------------------
-  # Backend Build
-  # --------------------------
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'Build Backend Image'
-    args:
-      - 'build'
-      - '-t'
-      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/backend:$SHORT_SHA'
-      - '-t'
-      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/backend:latest'
-      - './backend'
+# --- 1️⃣ Backend build
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+    - 'build'
+    - '-t'
+    - 'asia-south1-docker.pkg.dev/$PROJECT_ID/ats/backend:$SHORT_SHA'
+    - '-t'
+    - 'asia-south1-docker.pkg.dev/$PROJECT_ID/ats/backend:latest'
+    - './backend'
 
-  # Push Backend Image
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'Push Backend Image'
-    args:
-      - 'push'
-      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/backend:$SHORT_SHA'
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+    - 'push'
+    - 'asia-south1-docker.pkg.dev/$PROJECT_ID/ats/backend:$SHORT_SHA'
 
-  - name: 'gcr.io/cloud-builders/docker'
-    args:
-      - 'push'
-      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/backend:latest'
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+    - 'push'
+    - 'asia-south1-docker.pkg.dev/$PROJECT_ID/ats/backend:latest'
 
-  # --------------------------
-  # Frontend Build
-  # --------------------------
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'Build Frontend Image'
-    args:
-      - 'build'
-      - '-t'
-      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/frontend:$SHORT_SHA'
-      - '-t'
-      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/frontend:latest'
-      - './frontend'
+# --- 2️⃣ Deploy backend to Cloud Run
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      gcloud run deploy ats-backend \
+        --image asia-south1-docker.pkg.dev/$PROJECT_ID/ats/backend:latest \
+        --platform managed \
+        --region asia-south1 \
+        --allow-unauthenticated \
+        --memory 1Gi \
+        --set-env-vars DJANGO_SETTINGS_MODULE=core.settings_production,SECRET_KEY=ats-logiscareers-secret-key-2025-prod,DEBUG=False,ALLOWED_HOSTS=*,CORS_ALLOW_ALL_ORIGINS=True
 
-  # Push Frontend Image
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'Push Frontend Image'
-    args:
-      - 'push'
-      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/frontend:$SHORT_SHA'
+# --- 3️⃣ Frontend build
+- name: 'gcr.io/cloud-builders/docker'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      # Get backend URL dynamically
+      BACKEND_URL=$(gcloud run services describe ats-backend --region asia-south1 --platform managed --format 'value(status.url)')/api
+      echo "VITE_API_URL=$BACKEND_URL" > ./frontend/.env
 
-  - name: 'gcr.io/cloud-builders/docker'
-    args:
-      - 'push'
-      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/frontend:latest'
+      # Build frontend image
+      docker build -t asia-south1-docker.pkg.dev/$PROJECT_ID/ats/frontend:$SHORT_SHA -t asia-south1-docker.pkg.dev/$PROJECT_ID/ats/frontend:latest ./frontend
+      docker push asia-south1-docker.pkg.dev/$PROJECT_ID/ats/frontend:$SHORT_SHA
+      docker push asia-south1-docker.pkg.dev/$PROJECT_ID/ats/frontend:latest
 
-  # --------------------------
-  # Deploy Backend to Cloud Run with env from .env
-  # --------------------------
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    id: 'Deploy Backend'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        # Export variables from .env
-        export $(grep -v '^#' $_ENV_FILE | xargs)
-        # Deploy backend
-        gcloud run deploy $_BACKEND_SERVICE \
-          --image $_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/backend:latest \
-          --region $_REGION \
-          --platform managed \
-          --allow-unauthenticated \
-          --memory 1Gi \
-          --set-env-vars \
-          SECRET_KEY=$SECRET_KEY,DEBUG=$DEBUG,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASSWORD=$DB_PASSWORD,DB_HOST=$DB_HOST,DB_PORT=$DB_PORT,ALLOWED_HOSTS=$ALLOWED_HOSTS,CORS_ALLOW_ALL_ORIGINS=$CORS_ALLOW_ALL_ORIGINS
-
-  # --------------------------
-  # Deploy Frontend to Cloud Run
-  # --------------------------
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    id: 'Deploy Frontend'
-    entrypoint: 'gcloud'
-    args:
-      - 'run'
-      - 'deploy'
-      - '$_FRONTEND_SERVICE'
-      - '--image'
-      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/frontend:latest'
-      - '--region'
-      - '$_REGION'
-      - '--platform'
-      - 'managed'
-      - '--allow-unauthenticated'
+# --- 4️⃣ Deploy frontend to Cloud Run
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      gcloud run deploy ats-frontend \
+        --image asia-south1-docker.pkg.dev/$PROJECT_ID/ats/frontend:latest \
+        --platform managed \
+        --region asia-south1 \
+        --allow-unauthenticated
 
 images:
-  - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/backend:$SHORT_SHA'
-  - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/backend:latest'
-  - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/frontend:$SHORT_SHA'
-  - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REPO/frontend:latest'
+  - 'asia-south1-docker.pkg.dev/$PROJECT_ID/ats/backend:$SHORT_SHA'
+  - 'asia-south1-docker.pkg.dev/$PROJECT_ID/ats/backend:latest'
+  - 'asia-south1-docker.pkg.dev/$PROJECT_ID/ats/frontend:$SHORT_SHA'
+  - 'asia-south1-docker.pkg.dev/$PROJECT_ID/ats/frontend:latest'
 
 timeout: '1800s'
