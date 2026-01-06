@@ -1,5 +1,5 @@
-# Cloud Build for ATS LogisCareers
-# Builds and deploys backend and frontend to Cloud Run
+# Cloud Build config for ATS LogisCareers
+# Builds & deploys backend and frontend to Cloud Run
 
 steps:
 # ---------------- BACKEND ----------------
@@ -64,7 +64,7 @@ steps:
     - 'managed'
     - '--allow-unauthenticated'
 
-# ---------------- Images section ----------------
+# ---------------- Images ----------------
 images:
   - 'asia-south1-docker.pkg.dev/$PROJECT_ID/ats/ats-backend:latest'
   - 'asia-south1-docker.pkg.dev/$PROJECT_ID/ats/ats-frontend:latest'
