@@ -1,5 +1,5 @@
 # Cloud Build config for ATS LogisCareers
-# Builds & deploys backend and frontend to Cloud Run
+# Builds backend and frontend Docker images and deploys to Cloud Run
 
 steps:
 # ---------------- BACKEND ----------------
